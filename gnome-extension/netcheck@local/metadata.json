@@ -3,7 +3,7 @@
   "name": "NetCheck",
   "description": "Monitor per-app network usage with beautiful charts and reports",
   "shell-version": ["45", "46", "47", "48"],
-  "version": 1,
+  "version": 2,
   "url": "https://github.com/arashzich/NetCheck",
   "settings-schema": "org.gnome.shell.extensions.netcheck"
 }

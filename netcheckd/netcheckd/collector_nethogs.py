@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -8,6 +9,41 @@ from datetime import datetime
 from typing import Dict, Tuple
 
 from .config import NETHOGS_BIN, NETHOGS_REFRESH_SECONDS
+
+
+def get_process_name(pid: int, fallback: str) -> str:
+    """Get the real process name from /proc/<pid>/comm or cmdline."""
+    # If the fallback name is already good (not /proc/self/exe or unknown), use it
+    if fallback and not fallback.startswith('/proc/') and fallback != 'unknown':
+        return fallback
+
+    try:
+        # Try to read from /proc/<pid>/comm first (most reliable)
+        comm_path = f"/proc/{pid}/comm"
+        if os.path.exists(comm_path):
+            with open(comm_path, 'r') as f:
+                name = f.read().strip()
+                if name:
+                    return name
+    except (OSError, IOError):
+        pass
+
+    try:
+        # Fallback to cmdline and extract executable name
+        cmdline_path = f"/proc/{pid}/cmdline"
+        if os.path.exists(cmdline_path):
+            with open(cmdline_path, 'rb') as f:
+                cmdline = f.read().decode('utf-8', errors='replace')
+                # cmdline uses null bytes as separators
+                args = cmdline.split('\0')
+                if args and args[0]:
+                    # Get just the executable name (remove path)
+                    return os.path.basename(args[0])
+    except (OSError, IOError):
+        pass
+
+    # If all else fails, return the fallback
+    return fallback
 
 
 class NethogsCollector(threading.Thread):
@@ -53,6 +89,10 @@ class NethogsCollector(threading.Thread):
 
                 process = proc_with_pid[:second_last_slash]
                 pid = int(proc_with_pid[second_last_slash+1:last_slash])
+
+                # Get the real process name (handles /proc/self/exe cases)
+                process = get_process_name(pid, process)
+
                 # Parse rates (sent and recv are in KB/s)
                 tx_kbps = float(parts[1])
                 rx_kbps = float(parts[2])

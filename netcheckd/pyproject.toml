@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netcheckd"
-version = "1.0.0"
+version = "1.0.1"
 description = "Network usage monitoring daemon for NetCheck GNOME extension"
 authors = [
     {name = "ArashZich", email = "contact@arashzich.com"}

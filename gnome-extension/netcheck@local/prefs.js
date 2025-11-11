@@ -138,7 +138,7 @@ export default class NetCheckPreferences extends ExtensionPreferences {
 
     const versionRow = new Adw.ActionRow({
       title: "Version",
-      subtitle: "1.0",
+      subtitle: "1.0.1",
     });
     aboutGroup.add(versionRow);
 
