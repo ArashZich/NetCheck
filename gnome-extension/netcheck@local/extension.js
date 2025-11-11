@@ -33,388 +33,608 @@ function formatBytes(bytes) {
 }
 
 const NetCheckIndicator = GObject.registerClass(
-class NetCheckIndicator extends PanelMenu.Button {
-  _init(settings) {
-    super._init(0.0, "NetCheck");
+  class NetCheckIndicator extends PanelMenu.Button {
+    _init(settings) {
+      super._init(0.0, "NetCheck");
 
-    this._settings = settings;
-    this._box = new St.BoxLayout({ style_class: "panel-status-indicators-box" });
-
-    this._icon = new St.Icon({
-      icon_name: "network-transmit-receive-symbolic",
-      style_class: "system-status-icon",
-    });
-    this._box.add_child(this._icon);
-
-    this._label = new St.Label({
-      text: "",
-      y_align: Clutter.ActorAlign.CENTER,
-      style_class: "netcheck-panel-label"
-    });
-    this._box.add_child(this._label);
-
-    this.add_child(this._box);
-
-    this._proxy = null;
-    this._listItems = [];
-    this._currentPeriod = "today";
-    this._daemonAvailable = false;
-
-    // Connect settings changes
-    if (this._settings) {
-      this._settingsChangedId = this._settings.connect("changed", () => {
-        this._onSettingsChanged();
+      this._settings = settings;
+      this._box = new St.BoxLayout({
+        style_class: "panel-status-indicators-box",
       });
-    }
 
-    // Title with current period and refresh button
-    this._headerBox = new St.BoxLayout({
-      vertical: false,
-      style: "padding: 10px 12px; spacing: 10px;"
-    });
-
-    this._titleLabel = new St.Label({
-      text: "Network Usage",
-      style: "font-weight: bold; font-size: 15px;",
-      x_expand: true
-    });
-    this._headerBox.add_child(this._titleLabel);
-
-    // Small refresh button in header
-    const refreshBtn = new St.Button({
-      style_class: "button",
-      child: new St.Icon({
-        icon_name: "view-refresh-symbolic",
-        icon_size: 16
-      })
-    });
-    refreshBtn.connect("clicked", () => this._refresh());
-    this._headerBox.add_child(refreshBtn);
-
-    const titleItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
-    titleItem.actor.add_child(this._headerBox);
-    this.menu.addMenuItem(titleItem);
-
-    // Period selector buttons
-    const periodBox = new St.BoxLayout({
-      vertical: false,
-      style: "padding: 6px 12px; spacing: 6px;"
-    });
-
-    const periods = [
-      { id: "today", label: "Today" },
-      { id: "week", label: "Week" },
-      { id: "month", label: "Month" }
-    ];
-
-    this._periodButtons = {};
-
-    periods.forEach(period => {
-      const btn = new St.Button({
-        label: period.label,
-        style_class: "netcheck-period-button",
-        x_expand: true
+      this._icon = new St.Icon({
+        icon_name: "network-transmit-receive-symbolic",
+        style_class: "system-status-icon",
       });
-      btn.connect("clicked", () => this._setPeriod(period.id));
-      periodBox.add_child(btn);
-      this._periodButtons[period.id] = btn;
-    });
+      this._box.add_child(this._icon);
 
-    const periodItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
-    periodItem.actor.add_child(periodBox);
-    this.menu.addMenuItem(periodItem);
+      this._label = new St.Label({
+        text: "",
+        y_align: Clutter.ActorAlign.CENTER,
+        style_class: "netcheck-panel-label",
+      });
+      this._box.add_child(this._label);
 
-    this._separator1 = new PopupMenu.PopupSeparatorMenuItem();
-    this.menu.addMenuItem(this._separator1);
+      this.add_child(this._box);
 
-    // Total usage display
-    this._totalItem = new PopupMenu.PopupMenuItem("Total: calculating...");
-    this._totalItem.setSensitive(false);
-    this._totalItem.label.style = "font-weight: bold;";
-    this.menu.addMenuItem(this._totalItem);
-
-    this._separator2 = new PopupMenu.PopupSeparatorMenuItem();
-    this.menu.addMenuItem(this._separator2);
-
-    // Scrollable app list container
-    this._scrollView = new St.ScrollView({
-      style: "max-height: 400px; max-width: 500px;",
-      hscrollbar_policy: St.PolicyType.NEVER,
-      vscrollbar_policy: St.PolicyType.AUTOMATIC
-    });
-
-    this._listBox = new St.BoxLayout({ vertical: true });
-    this._scrollView.add_child(this._listBox);
-
-    const scrollItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
-    scrollItem.actor.add_child(this._scrollView);
-    this.menu.addMenuItem(scrollItem);
-
-    this._separator3 = new PopupMenu.PopupSeparatorMenuItem();
-    this.menu.addMenuItem(this._separator3);
-
-    // Settings button
-    const settingsItem = new PopupMenu.PopupMenuItem("⚙️ Settings");
-    settingsItem.connect("activate", () => this._openSettings());
-    this.menu.addMenuItem(settingsItem);
-
-    this._updatePeriodButtons();
-    this._initProxy();
-    this._refresh();
-
-    this._startTimer();
-    this._applyTheme();
-  }
-
-  _openSettings() {
-    try {
-      Util.spawn(["gnome-extensions", "prefs", "netcheck@local"]);
-    } catch (e) {
-      logError(e);
-    }
-  }
-
-  _applyTheme() {
-    const themeId = this._settings ? this._settings.get_int("theme") : 0;
-
-    // Check if Auto Dark/Light is selected
-    if (themeId === 5) {
-      // Detect system theme
-      const settings = new Gio.Settings({ schema: "org.gnome.desktop.interface" });
-      const colorScheme = settings.get_string("color-scheme");
-      const isDark = colorScheme.includes("dark");
-      this._themeColor = isDark ? "#4a9eff" : "#2563eb"; // Lighter blue for light theme
-    } else {
-      const themes = {
-        0: "#4a9eff", // Blue
-        1: "#51cf66", // Green
-        2: "#a78bfa", // Purple
-        3: "#ffa94d", // Orange
-        4: "#ff6b6b", // Red
-      };
-      this._themeColor = themes[themeId] || themes[0];
-    }
-  }
-
-  _startTimer() {
-    if (this._timer) {
-      GLib.source_remove(this._timer);
-    }
-    const interval = this._settings ? this._settings.get_int("refresh-interval") : 5;
-    this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
-      this._refresh();
-      return true;
-    });
-  }
-
-  _onSettingsChanged() {
-    this._startTimer();
-    this._applyTheme();
-    this._refresh();
-  }
-
-  _initProxy() {
-    try {
-      this._proxy = _proxy();
-      this._daemonAvailable = true;
-    } catch (e) {
+      this._proxy = null;
+      this._listItems = [];
+      this._currentPeriod = "today";
       this._daemonAvailable = false;
-    }
-  }
 
-  _setPeriod(period) {
-    this._currentPeriod = period;
-    this._updatePeriodButtons();
-    this._refresh();
-  }
-
-  _updatePeriodButtons() {
-    Object.keys(this._periodButtons).forEach(id => {
-      const btn = this._periodButtons[id];
-      if (id === this._currentPeriod) {
-        btn.style_class = "netcheck-period-button netcheck-period-active";
-      } else {
-        btn.style_class = "netcheck-period-button";
+      // Connect settings changes
+      if (this._settings) {
+        this._settingsChangedId = this._settings.connect("changed", () => {
+          this._onSettingsChanged();
+        });
       }
-    });
-  }
 
-  _clearList() {
-    this._listBox.destroy_all_children();
-    this._listItems = [];
-  }
-
-  _refresh() {
-    this._clearList();
-
-    if (!this._proxy) {
-      this._initProxy();
-    }
-
-    if (!this._daemonAvailable) {
-      this._showError("Daemon not running");
-      this._label.text = "";
-      return;
-    }
-
-    try {
-      // Get top apps
-      const maxApps = this._settings ? this._settings.get_int("max-apps") : 20;
-      const variant = this._proxy.call_sync(
-        "GetTopApps",
-        new GLib.Variant("(su)", [this._currentPeriod, maxApps]),
-        Gio.DBusCallFlags.NONE,
-        -1,
-        null
-      );
-
-      const [apps] = variant.deep_unpack();
-
-      // Calculate totals from apps
-      let totalRx = 0;
-      let totalTx = 0;
-      apps.forEach(([_, rx, tx]) => {
-        totalRx += rx;
-        totalTx += tx;
+      // Title with current period and refresh button
+      this._headerBox = new St.BoxLayout({
+        vertical: false,
+        style: "padding: 10px 12px; spacing: 10px;",
       });
-      const total = totalRx + totalTx;
 
-      this._totalItem.label.text = `Total: ↓ ${formatBytes(totalRx)} | ↑ ${formatBytes(totalTx)} | Σ ${formatBytes(total)}`;
+      this._titleLabel = new St.Label({
+        text: "Network Usage",
+        style: "font-weight: bold; font-size: 15px;",
+        x_expand: true,
+      });
+      this._headerBox.add_child(this._titleLabel);
 
-      const showLabel = this._settings ? this._settings.get_boolean("show-panel-label") : true;
-      this._label.text = showLabel ? formatBytes(total) : "";
+      // Small refresh button in header
+      const refreshBtn = new St.Button({
+        style_class: "button",
+        child: new St.Icon({
+          icon_name: "view-refresh-symbolic",
+          icon_size: 16,
+        }),
+      });
+      refreshBtn.connect("clicked", () => this._refresh());
+      this._headerBox.add_child(refreshBtn);
 
-      if (apps.length === 0) {
-        this._showMessage("No data yet\nWait a minute for data to accumulate");
+      const titleItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+      titleItem.actor.add_child(this._headerBox);
+      this.menu.addMenuItem(titleItem);
+
+      // Period selector buttons
+      const periodBox = new St.BoxLayout({
+        vertical: false,
+        style: "padding: 6px 12px; spacing: 6px;",
+      });
+
+      const periods = [
+        { id: "today", label: "Today" },
+        { id: "week", label: "Week" },
+        { id: "month", label: "Month" },
+      ];
+
+      this._periodButtons = {};
+
+      periods.forEach((period) => {
+        const btn = new St.Button({
+          label: period.label,
+          style_class: "netcheck-period-button",
+          x_expand: true,
+        });
+        btn.connect("clicked", () => this._setPeriod(period.id));
+        periodBox.add_child(btn);
+        this._periodButtons[period.id] = btn;
+      });
+
+      const periodItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+      periodItem.actor.add_child(periodBox);
+      this.menu.addMenuItem(periodItem);
+
+      this._separator1 = new PopupMenu.PopupSeparatorMenuItem();
+      this.menu.addMenuItem(this._separator1);
+
+      // Total usage display (multi-line for better readability)
+      this._totalBox = new St.BoxLayout({
+        vertical: true,
+        style: "padding: 8px 12px; spacing: 4px;",
+      });
+
+      this._totalUpDownLabel = new St.Label({
+        text: "calculating...",
+        style: "font-size: 12px; color: #888;",
+      });
+
+      this._totalSumLabel = new St.Label({
+        text: "",
+        style: "font-weight: bold; font-size: 14px;",
+      });
+
+      this._totalBox.add_child(this._totalUpDownLabel);
+      this._totalBox.add_child(this._totalSumLabel);
+
+      const totalItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+      totalItem.actor.add_child(this._totalBox);
+      this.menu.addMenuItem(totalItem);
+
+      this._separator2 = new PopupMenu.PopupSeparatorMenuItem();
+      this.menu.addMenuItem(this._separator2);
+
+      // Scrollable app list container
+      this._scrollView = new St.ScrollView({
+        style: "max-height: 400px; max-width: 500px;",
+        hscrollbar_policy: St.PolicyType.NEVER,
+        vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      });
+
+      this._listBox = new St.BoxLayout({ vertical: true });
+      this._scrollView.add_child(this._listBox);
+
+      const scrollItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+      scrollItem.actor.add_child(this._scrollView);
+      this.menu.addMenuItem(scrollItem);
+
+      this._separator3 = new PopupMenu.PopupSeparatorMenuItem();
+      this.menu.addMenuItem(this._separator3);
+
+      // Show More button
+      this._showMoreItem = new PopupMenu.PopupMenuItem("Show All Apps");
+      this._showMoreItem.connect("activate", () => this._openDetailedView());
+      this.menu.addMenuItem(this._showMoreItem);
+
+      // Settings button
+      const settingsItem = new PopupMenu.PopupMenuItem("Settings");
+      settingsItem.connect("activate", () => this._openSettings());
+      this.menu.addMenuItem(settingsItem);
+
+      this._updatePeriodButtons();
+      this._initProxy();
+      this._refresh();
+
+      this._startTimer();
+      this._applyTheme();
+    }
+
+    _openSettings() {
+      try {
+        Util.spawn(["gnome-extensions", "prefs", "netcheck@local"]);
+      } catch (e) {
+        logError(e);
+      }
+    }
+
+    _openDetailedView() {
+      if (!this._allApps || this._allApps.length === 0) {
         return;
       }
 
-      apps.forEach(([name, rx, tx]) => {
-        const totalBytes = rx + tx;
-        const percentage = total > 0 ? (totalBytes / total * 100) : 0;
+      // Create dialog using GNOME's standard dialog with GTK
+      try {
+        // Prepare app list data as JSON string
+        const periodText =
+          this._currentPeriod === "today"
+            ? "Today"
+            : this._currentPeriod === "week"
+            ? "This Week"
+            : "This Month";
+        const total = this._totalRx + this._totalTx;
 
-        const itemBox = new St.BoxLayout({
-          vertical: true,
-          style: "padding: 6px 12px; spacing: 4px;"
+        let htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1e1e1e;
+      color: #e0e0e0;
+      padding: 20px;
+      margin: 0;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid #333;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 24px;
+      color: ${this._themeColor};
+    }
+    .summary {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .summary-line {
+      margin: 5px 0;
+    }
+    .total {
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .app-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .app-item {
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+      border-radius: 6px;
+      transition: background 0.2s;
+    }
+    .app-item:nth-child(even) {
+      background: rgba(255, 255, 255, 0.01);
+    }
+    .app-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .app-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .app-name {
+      font-weight: bold;
+      flex: 1;
+    }
+    .app-total {
+      color: ${this._themeColor};
+      font-weight: bold;
+      margin-left: 15px;
+    }
+    .app-details {
+      display: flex;
+      gap: 20px;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+    .progress-bar {
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: ${this._themeColor};
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>All Apps - ${periodText}</h1>
+  </div>
+
+  <div class="summary">
+    <div class="summary-line">Download: ${formatBytes(
+      this._totalRx
+    )} | Upload: ${formatBytes(this._totalTx)}</div>
+    <div class="summary-line total">Total: ${formatBytes(total)}</div>
+  </div>
+
+  <div class="app-list">`;
+
+        this._allApps.forEach(([name, rx, tx], index) => {
+          const totalBytes = rx + tx;
+          const percentage = total > 0 ? (totalBytes / total) * 100 : 0;
+          const displayName =
+            name.length > 80 ? name.substring(0, 77) + "..." : name;
+
+          htmlContent += `
+    <div class="app-item">
+      <div class="app-header">
+        <div class="app-name">${index + 1}. ${displayName}</div>
+        <div class="app-total">${formatBytes(totalBytes)}</div>
+      </div>
+      <div class="app-details">
+        <span>↓ ${formatBytes(rx)}</span>
+        <span>↑ ${formatBytes(tx)}</span>
+        <span style="margin-left: auto;">${percentage.toFixed(1)}%</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" style="width: ${percentage}%;"></div>
+      </div>
+    </div>`;
         });
 
-        // Truncate long names
-        const displayName = name.length > 40 ? name.substring(0, 37) + "..." : name;
+        htmlContent += `
+  </div>
+</body>
+</html>`;
 
-        // App name and total
-        const headerBox = new St.BoxLayout({ vertical: false });
-        const nameLabel = new St.Label({
-          text: displayName,
-          style: "font-weight: bold; min-width: 150px; max-width: 300px;"
-        });
-        const totalLabel = new St.Label({
-          text: formatBytes(totalBytes),
-          x_expand: true,
-          x_align: Clutter.ActorAlign.END,
-          style: `color: ${this._themeColor};`
-        });
-        headerBox.add_child(nameLabel);
-        headerBox.add_child(totalLabel);
-        itemBox.add_child(headerBox);
+        // Write to temp file and open with default browser
+        const tmpFile = GLib.build_filenamev([
+          GLib.get_tmp_dir(),
+          "netcheck-details.html",
+        ]);
+        GLib.file_set_contents(tmpFile, htmlContent);
 
-        // Download / Upload details
-        const detailBox = new St.BoxLayout({ vertical: false, style: "spacing: 15px;" });
-        const downLabel = new St.Label({
-          text: `↓ ${formatBytes(rx)}`,
-          style: "color: #888; font-size: 11px;"
-        });
-        const upLabel = new St.Label({
-          text: `↑ ${formatBytes(tx)}`,
-          style: "color: #888; font-size: 11px;"
-        });
-        const percentLabel = new St.Label({
-          text: `${percentage.toFixed(1)}%`,
-          x_expand: true,
-          x_align: Clutter.ActorAlign.END,
-          style: "color: #666; font-size: 11px;"
-        });
-        detailBox.add_child(downLabel);
-        detailBox.add_child(upLabel);
-        detailBox.add_child(percentLabel);
-        itemBox.add_child(detailBox);
+        Util.spawn(["xdg-open", tmpFile]);
+      } catch (e) {
+        logError(e);
+      }
+    }
 
-        // Progress bar
-        const barContainer = new St.Widget({
-          style: "height: 4px; background-color: #333; border-radius: 2px;",
-          layout_manager: new Clutter.BinLayout()
-        });
-        const bar = new St.Widget({
-          style: `width: ${percentage}%; height: 4px; background-color: ${this._themeColor}; border-radius: 2px;`
-        });
-        barContainer.add_child(bar);
-        itemBox.add_child(barContainer);
+    _applyTheme() {
+      const themeId = this._settings ? this._settings.get_int("theme") : 0;
 
-        this._listBox.add_child(itemBox);
-        this._listItems.push(itemBox);
+      // Check if Auto Dark/Light is selected
+      if (themeId === 5) {
+        // Detect system theme
+        const settings = new Gio.Settings({
+          schema: "org.gnome.desktop.interface",
+        });
+        const colorScheme = settings.get_string("color-scheme");
+        const isDark = colorScheme.includes("dark");
+        this._themeColor = isDark ? "#4a9eff" : "#2563eb"; // Lighter blue for light theme
+      } else {
+        const themes = {
+          0: "#4a9eff", // Blue
+          1: "#51cf66", // Green
+          2: "#a78bfa", // Purple
+          3: "#ffa94d", // Orange
+          4: "#ff6b6b", // Red
+        };
+        this._themeColor = themes[themeId] || themes[0];
+      }
+    }
+
+    _startTimer() {
+      if (this._timer) {
+        GLib.source_remove(this._timer);
+      }
+      const interval = this._settings
+        ? this._settings.get_int("refresh-interval")
+        : 5;
+      this._timer = GLib.timeout_add_seconds(
+        GLib.PRIORITY_DEFAULT,
+        interval,
+        () => {
+          this._refresh();
+          return true;
+        }
+      );
+    }
+
+    _onSettingsChanged() {
+      this._startTimer();
+      this._applyTheme();
+      this._refresh();
+    }
+
+    _initProxy() {
+      try {
+        this._proxy = _proxy();
+        this._daemonAvailable = true;
+      } catch (e) {
+        this._daemonAvailable = false;
+      }
+    }
+
+    _setPeriod(period) {
+      this._currentPeriod = period;
+      this._updatePeriodButtons();
+      this._refresh();
+    }
+
+    _updatePeriodButtons() {
+      Object.keys(this._periodButtons).forEach((id) => {
+        const btn = this._periodButtons[id];
+        if (id === this._currentPeriod) {
+          btn.style_class = "netcheck-period-button netcheck-period-active";
+        } else {
+          btn.style_class = "netcheck-period-button";
+        }
       });
+    }
 
-    } catch (e) {
-      this._daemonAvailable = false;
-      this._showError("Daemon not running\nRun: systemctl --user start netcheckd");
+    _clearList() {
+      this._listBox.destroy_all_children();
+      this._listItems = [];
+    }
+
+    _refresh() {
+      this._clearList();
+
+      if (!this._proxy) {
+        this._initProxy();
+      }
+
+      if (!this._daemonAvailable) {
+        this._showError("Daemon not running");
+        this._label.text = "";
+        return;
+      }
+
+      try {
+        // Get top apps
+        const maxApps = this._settings
+          ? this._settings.get_int("max-apps")
+          : 20;
+        const variant = this._proxy.call_sync(
+          "GetTopApps",
+          new GLib.Variant("(su)", [this._currentPeriod, maxApps]),
+          Gio.DBusCallFlags.NONE,
+          -1,
+          null
+        );
+
+        const [apps] = variant.deep_unpack();
+
+        // Calculate totals from apps
+        let totalRx = 0;
+        let totalTx = 0;
+        apps.forEach(([_, rx, tx]) => {
+          totalRx += rx;
+          totalTx += tx;
+        });
+        const total = totalRx + totalTx;
+
+        // Store all apps for detailed view
+        this._allApps = apps;
+        this._totalRx = totalRx;
+        this._totalTx = totalTx;
+
+        // Update total display (two lines for better readability)
+        this._totalUpDownLabel.text = `↓ Download: ${formatBytes(
+          totalRx
+        )}  |  ↑ Upload: ${formatBytes(totalTx)}`;
+        this._totalSumLabel.text = `Total: ${formatBytes(total)}`;
+
+        const showLabel = this._settings
+          ? this._settings.get_boolean("show-panel-label")
+          : true;
+        this._label.text = showLabel ? formatBytes(total) : "";
+
+        if (apps.length === 0) {
+          this._showMessage(
+            "No data yet\nWait a minute for data to accumulate"
+          );
+          return;
+        }
+
+        // Show only top 7-8 apps in popup
+        const POPUP_APP_LIMIT = 8;
+        const displayApps = apps.slice(0, POPUP_APP_LIMIT);
+
+        displayApps.forEach(([name, rx, tx]) => {
+          const totalBytes = rx + tx;
+          const percentage = total > 0 ? (totalBytes / total) * 100 : 0;
+
+          const itemBox = new St.BoxLayout({
+            vertical: true,
+            style: "padding: 6px 12px; spacing: 4px;",
+          });
+
+          // Truncate long names
+          const displayName =
+            name.length > 40 ? name.substring(0, 37) + "..." : name;
+
+          // App name and total
+          const headerBox = new St.BoxLayout({ vertical: false });
+          const nameLabel = new St.Label({
+            text: displayName,
+            style: "font-weight: bold; min-width: 150px; max-width: 300px;",
+          });
+          const totalLabel = new St.Label({
+            text: formatBytes(totalBytes),
+            x_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            style: `color: ${this._themeColor};`,
+          });
+          headerBox.add_child(nameLabel);
+          headerBox.add_child(totalLabel);
+          itemBox.add_child(headerBox);
+
+          // Download / Upload details
+          const detailBox = new St.BoxLayout({
+            vertical: false,
+            style: "spacing: 15px;",
+          });
+          const downLabel = new St.Label({
+            text: `↓ ${formatBytes(rx)}`,
+            style: "color: #888; font-size: 11px;",
+          });
+          const upLabel = new St.Label({
+            text: `↑ ${formatBytes(tx)}`,
+            style: "color: #888; font-size: 11px;",
+          });
+          const percentLabel = new St.Label({
+            text: `${percentage.toFixed(1)}%`,
+            x_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            style: "color: #666; font-size: 11px;",
+          });
+          detailBox.add_child(downLabel);
+          detailBox.add_child(upLabel);
+          detailBox.add_child(percentLabel);
+          itemBox.add_child(detailBox);
+
+          // Progress bar
+          const barContainer = new St.Widget({
+            style: "height: 4px; background-color: #333; border-radius: 2px;",
+            layout_manager: new Clutter.BinLayout(),
+          });
+          const bar = new St.Widget({
+            style: `width: ${percentage}%; height: 4px; background-color: ${this._themeColor}; border-radius: 2px;`,
+          });
+          barContainer.add_child(bar);
+          itemBox.add_child(barContainer);
+
+          this._listBox.add_child(itemBox);
+          this._listItems.push(itemBox);
+        });
+      } catch (e) {
+        this._daemonAvailable = false;
+        this._showError(
+          "Daemon not running\nRun: systemctl --user start netcheckd"
+        );
+        this._label.text = "";
+        logError(e);
+      }
+    }
+
+    _showError(message) {
+      const errorBox = new St.BoxLayout({
+        vertical: true,
+        style: "padding: 20px; spacing: 8px;",
+      });
+      const icon = new St.Icon({
+        icon_name: "dialog-error-symbolic",
+        icon_size: 48,
+        style: "color: #ff6b6b;",
+      });
+      const label = new St.Label({
+        text: message,
+        style: "color: #ff6b6b; text-align: center;",
+      });
+      errorBox.add_child(icon);
+      errorBox.add_child(label);
+      this._listBox.add_child(errorBox);
+      this._totalUpDownLabel.text = "No data available";
+      this._totalSumLabel.text = "";
+    }
+
+    _showMessage(message) {
+      const msgBox = new St.BoxLayout({
+        vertical: true,
+        style: "padding: 20px; spacing: 8px;",
+      });
+      const icon = new St.Icon({
+        icon_name: "dialog-information-symbolic",
+        icon_size: 48,
+        style: `color: ${this._themeColor};`,
+      });
+      const label = new St.Label({
+        text: message,
+        style: "color: #888; text-align: center;",
+      });
+      msgBox.add_child(icon);
+      msgBox.add_child(label);
+      this._listBox.add_child(msgBox);
+      this._totalUpDownLabel.text = "↓ Download: 0 B  |  ↑ Upload: 0 B";
+      this._totalSumLabel.text = "Total: 0 B";
       this._label.text = "";
-      logError(e);
+    }
+
+    destroy() {
+      if (this._timer) {
+        GLib.source_remove(this._timer);
+        this._timer = 0;
+      }
+      if (this._settingsChangedId && this._settings) {
+        this._settings.disconnect(this._settingsChangedId);
+        this._settingsChangedId = null;
+      }
+      this._clearList();
+      super.destroy();
     }
   }
-
-  _showError(message) {
-    const errorBox = new St.BoxLayout({
-      vertical: true,
-      style: "padding: 20px; spacing: 8px;"
-    });
-    const icon = new St.Icon({
-      icon_name: "dialog-error-symbolic",
-      icon_size: 48,
-      style: "color: #ff6b6b;"
-    });
-    const label = new St.Label({
-      text: message,
-      style: "color: #ff6b6b; text-align: center;"
-    });
-    errorBox.add_child(icon);
-    errorBox.add_child(label);
-    this._listBox.add_child(errorBox);
-    this._totalItem.label.text = "Total: N/A";
-  }
-
-  _showMessage(message) {
-    const msgBox = new St.BoxLayout({
-      vertical: true,
-      style: "padding: 20px; spacing: 8px;"
-    });
-    const icon = new St.Icon({
-      icon_name: "dialog-information-symbolic",
-      icon_size: 48,
-      style: `color: ${this._themeColor};`
-    });
-    const label = new St.Label({
-      text: message,
-      style: "color: #888; text-align: center;"
-    });
-    msgBox.add_child(icon);
-    msgBox.add_child(label);
-    this._listBox.add_child(msgBox);
-    this._totalItem.label.text = "Total: 0 B";
-    this._label.text = "";
-  }
-
-  destroy() {
-    if (this._timer) {
-      GLib.source_remove(this._timer);
-      this._timer = 0;
-    }
-    if (this._settingsChangedId && this._settings) {
-      this._settings.disconnect(this._settingsChangedId);
-      this._settingsChangedId = null;
-    }
-    this._clearList();
-    super.destroy();
-  }
-});
+);
 
 export default class Extension {
   constructor(metadata) {
