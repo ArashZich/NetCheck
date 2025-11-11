@@ -1,0 +1,11 @@
+dbus-next==0.2.3
+psutil==5.9.8
+SQLAlchemy==2.0.35
+alembic==1.13.2
+python-dateutil==2.9.0.post0
+
+
+
+
+
+

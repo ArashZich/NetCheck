@@ -1,0 +1,27 @@
+.netcheck-panel-label {
+    margin-left: 6px;
+    font-size: 11px;
+    color: #4a9eff;
+    font-weight: bold;
+}
+
+.netcheck-period-button {
+    padding: 6px 12px;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #ccc;
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+.netcheck-period-button:hover {
+    background-color: #3a3a3a;
+    border-color: #4a9eff;
+}
+
+.netcheck-period-active {
+    background-color: #4a9eff !important;
+    color: #fff !important;
+    border-color: #4a9eff !important;
+}

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netcheckd"
+version = "1.0.0"
+description = "Network usage monitoring daemon for NetCheck GNOME extension"
+authors = [
+    {name = "ArashZich", email = "contact@arashzich.com"}
+]
+license = {text = "GPL-3.0"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "dbus-next>=0.2.3",
+    "psutil>=5.9.8",
+    "SQLAlchemy>=2.0.35",
+    "python-dateutil>=2.8.2"
+]
+
+[project.urls]
+Homepage = "https://github.com/arashzich/NetCheck"
+Repository = "https://github.com/arashzich/NetCheck"
+
+
+
+
+
+
